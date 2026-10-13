@@ -38,7 +38,7 @@
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
   <br/>
-  <a href="https://open.maic.chat/">在线体验</a> · <a href="#-快速开始">快速开始</a> · <a href="#lemonade-local-ai">Lemonade</a> · <a href="#funasr-local-asr">FunASR</a> · <a href="#-功能特性">功能特性</a> · <a href="#-使用场景">使用场景</a> · <a href="#-agent-工作台集成">OpenClaw</a>
+  <a href="https://open.maic.chat/">在线体验</a> · <a href="#-快速开始">快速开始</a> · <a href="#二次开发说明">二次开发</a> · <a href="#lemonade-local-ai">Lemonade</a> · <a href="#funasr-local-asr">FunASR</a> · <a href="#-功能特性">功能特性</a> · <a href="#-使用场景">使用场景</a> · <a href="#-agent-工作台集成">OpenClaw</a>
 </p>
 
 
@@ -83,6 +83,10 @@ https://github.com/user-attachments/assets/f4a2f1be-6615-4330-aea1-b86ccf42045e
 - **白板 & 语音** — 智能体实时绘制图表、书写公式、语音讲解
 - **灵活导出** — 下载可编辑的 `.pptx` 幻灯片或交互式 `.html` 网页
 - **[Agent 工作台集成](#-agent-工作台集成)** — OpenMAIC Skill 支持 OpenClaw、Codex、DeepSeek、WorkBuddy 等，在飞书、Slack、Telegram 等 20+ 聊天应用或 IDE 里直接生成课堂
+
+## 二次开发说明
+
+本仓库是 [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) 的 fork，用作二次开发基线。建议从当前默认分支（`main`）新建 feature 分支，改完后向本仓库提交 Pull Request。不要把 API key 等密钥提交进仓库；本地密钥放在 `.env.local`（可从 [`.env.example`](.env.example) 复制），该文件已被 Git 忽略。
 
 ## 🚀 快速开始
 
