@@ -353,6 +353,8 @@ describe('generationComplete', () => {
     await useStageStore.getState().loadFromStorage('stage-1');
 
     expect(useStageStore.getState().generationComplete).toBe(false);
+    // Reloading the classroom that owns the failures keeps them.
+    expect(useStageStore.getState().failedOutlines).toEqual([makeOutline(2)]);
     expect(stageOutlinesPut).not.toHaveBeenCalled();
   });
 
@@ -375,6 +377,9 @@ describe('generationComplete', () => {
     await useStageStore.getState().loadFromStorage('stage-1');
 
     expect(useStageStore.getState().generationComplete).toBe(true);
+    // Failures belong to the classroom that produced them. A completed
+    // classroom loaded afterwards must not keep them, or export stays disabled.
+    expect(useStageStore.getState().failedOutlines).toEqual([]);
     await vi.waitFor(() => expect(stageOutlinesPut).toHaveBeenCalled());
     const healed = stageOutlinesPut.mock.calls.at(-1)![0] as { generationComplete?: boolean };
     expect(healed.generationComplete).toBe(true);
@@ -598,6 +603,7 @@ describe('generationComplete', () => {
     await useStageStore.getState().loadFromStorage('stage-a');
 
     expect(useStageStore.getState().generationComplete).toBe(true);
+    expect(useStageStore.getState().failedOutlines).toEqual([]);
     expect(useStageStore.getState().stage?.id).toBe('stage-a');
     expect(useStageStore.getState().scenes).toHaveLength(1);
     expect(useStageStore.getState().scenes[0]).toMatchObject({
