@@ -1129,6 +1129,11 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
           outlines,
           generationComplete,
           generatingOutlines,
+          // `failedOutlines` is computed above for completion inference, but it
+          // is also the export gate. Write the stage-scoped value back: a
+          // different classroom must not keep the previous classroom's
+          // failures, while a reload of the same classroom keeps its own.
+          failedOutlines,
           // A course the browser was generating before generation moved to
           // the server: no run will produce the rest (a server job's course
           // is its job's to finish).
