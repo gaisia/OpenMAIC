@@ -266,6 +266,16 @@ async function validateBootConfiguration(): Promise<void> {
   //
   // A registration that throws stops the process too, reported as a startup
   // failure with its stack (it is host code, not a setting).
+  //
+  // This fork registers school identity when SCHOOL_JWT_* is set (gateway JWT,
+  // anonymous fallback off, students refused at authorizeCreate). Unset, the
+  // call does nothing and the checks below keep the upstream behavior. Do not
+  // also call configureOwnerAuthentication in that case: registration is single-shot.
+  const { registerSchoolHost } = await import('@/lib/server/school/register');
+  runConfigurationCheck(() => {
+    registerSchoolHost();
+  });
+
   const { validateOwnerIdentityConfiguration } = await import('@/lib/server/identity/registry');
   runConfigurationCheck(validateOwnerIdentityConfiguration);
 
