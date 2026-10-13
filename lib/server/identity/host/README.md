@@ -2,8 +2,13 @@
 
 This directory is where a deployment keeps its own owner auth methods (see
 "Owner identity" in the repository README): a session cookie, an API key, or
-a gateway-signed token such as the README's JWT recipe. OpenMAIC ships nothing
-here.
+a gateway-signed token such as the README's JWT recipe.
+
+This fork ships `gateway-jwt.ts` for school single sign-on. It is registered
+from `instrumentation.ts` by `registerSchoolHost` only when `SCHOOL_JWT_*` is
+set (`anonymousFallback: false`). Configuration, role mapping, and the smoke
+checklist are in `lib/server/school/README.md`. Upstream deployments that
+leave those variables unset still have no host method here.
 
 It is the only place outside core that may read identity headers: the
 boundary test (`tests/server/identity/cookie-guard.test.ts`) fails on gateway

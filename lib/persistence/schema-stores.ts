@@ -17,6 +17,7 @@ import { RUNTIME_PG_MIGRATIONS } from '@openmaic/storage/runtime/pg';
 import { USER_SKILL_PG_MIGRATIONS } from '@openmaic/storage/skill/pg';
 
 import { OWNER_AGENT_MIGRATIONS } from '@/lib/server/agents/store';
+import { SCHOOL_MIGRATIONS } from '@/lib/server/school/schema';
 
 import { GENERATION_RUN_MIGRATIONS } from './generation-runs';
 import { LEGACY_CLASSROOM_IMPORT_MIGRATIONS } from './legacy-classroom-imports';
@@ -41,4 +42,5 @@ export const APP_SCHEMA_STORES: readonly SchemaMigrationSet[] = [
   AGENT_SESSION_MATERIAL_PG_MIGRATIONS,
   USER_SKILL_PG_MIGRATIONS,
   GENERATION_RUN_MIGRATIONS,
+  SCHOOL_MIGRATIONS,
 ];

@@ -186,6 +186,13 @@ const SHIPPED: readonly (readonly [
     true,
     '73994d78d22a31a3b7c62f9ecb147a20bd70ffa17ab036f7bd6a75df682d9827',
   ],
+  [
+    'school-directory',
+    1,
+    'baseline',
+    false,
+    'f609197ccb6b5380e11109b3f63e6eb902a5e97b5cacbd7be379fc5fc6e01716',
+  ],
 ];
 
 /**
