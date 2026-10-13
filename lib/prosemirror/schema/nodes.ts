@@ -1,6 +1,7 @@
 import { nodes } from 'prosemirror-schema-basic';
 import type { Node, NodeSpec } from 'prosemirror-model';
 import { listItem as _listItem } from 'prosemirror-schema-list';
+import { inlineMath } from './inlineMath';
 
 type Attr = Record<string, number | string>;
 
@@ -167,6 +168,7 @@ const schemaNodes = {
   paragraph,
   blockquote,
   text,
+  inline_math: inlineMath,
   ordered_list: orderedList,
   bullet_list: bulletList,
   list_item: listItem,

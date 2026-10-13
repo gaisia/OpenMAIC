@@ -4,7 +4,7 @@ import { Schema, DOMParser } from 'prosemirror-model';
 import { buildPlugins, type PluginOptions } from './plugins/index';
 import { schemaNodes, schemaMarks } from './schema/index';
 
-const schema = new Schema({
+export const schema = new Schema({
   nodes: schemaNodes,
   marks: schemaMarks,
 });
