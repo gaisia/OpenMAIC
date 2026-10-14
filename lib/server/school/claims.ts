@@ -4,8 +4,9 @@
  * created the tables yet is a no-op: schema migration refuses to run inside
  * the claim's transaction, so this only touches tables that already exist.
  *
- * Owner ids on profile, role, teacher, and member rows follow
- * `ON UPDATE CASCADE`. When the account already has a profile, the anonymous
+ * Owner ids on profile, role, teacher, member, and direct course-assignment
+ * rows follow `ON UPDATE CASCADE`. `assigned_by` is not a foreign key, so it
+ * is rewritten here. When the account already has a profile, the anonymous
  * rows are merged and the source profile is deleted.
  */
 import type { Queryable } from '@openmaic/storage/document/pg';
@@ -13,6 +14,13 @@ import type { Queryable } from '@openmaic/storage/document/pg';
 async function tableReady(tx: Queryable): Promise<boolean> {
   const result = await tx.query<{ present: boolean } & Record<string, unknown>>(
     `SELECT to_regclass('school_users') IS NOT NULL AS present`,
+  );
+  return result.rows[0]?.present === true;
+}
+
+async function assignmentsReady(tx: Queryable): Promise<boolean> {
+  const result = await tx.query<{ present: boolean } & Record<string, unknown>>(
+    `SELECT to_regclass('school_course_class_assignments') IS NOT NULL AS present`,
   );
   return result.rows[0]?.present === true;
 }
@@ -34,7 +42,41 @@ async function rewriteActors(
     `UPDATE school_class_members SET added_by = $2 WHERE added_by = $1 RETURNING 1`,
     [fromOwnerId, toOwnerId],
   );
-  return classes.rows.length + teachers.rows.length + members.rows.length;
+  if (!(await assignmentsReady(tx))) {
+    return classes.rows.length + teachers.rows.length + members.rows.length;
+  }
+  const classAssignments = await tx.query(
+    `UPDATE school_course_class_assignments SET assigned_by = $2 WHERE assigned_by = $1 RETURNING 1`,
+    [fromOwnerId, toOwnerId],
+  );
+  const studentAssignments = await tx.query(
+    `UPDATE school_course_student_assignments SET assigned_by = $2 WHERE assigned_by = $1 RETURNING 1`,
+    [fromOwnerId, toOwnerId],
+  );
+  return (
+    classes.rows.length +
+    teachers.rows.length +
+    members.rows.length +
+    classAssignments.rows.length +
+    studentAssignments.rows.length
+  );
+}
+
+/** Copy direct course assignments onto the account before the source profile is deleted. */
+async function mergeStudentAssignments(
+  tx: Queryable,
+  fromOwnerId: string,
+  toOwnerId: string,
+): Promise<void> {
+  if (!(await assignmentsReady(tx))) return;
+  await tx.query(
+    `INSERT INTO school_course_student_assignments (stage_id, owner_id, assigned_by, assigned_at)
+     SELECT stage_id, $2, assigned_by, assigned_at
+       FROM school_course_student_assignments
+      WHERE owner_id = $1
+     ON CONFLICT DO NOTHING`,
+    [fromOwnerId, toOwnerId],
+  );
 }
 
 export async function rekeySchoolDirectory(
@@ -86,6 +128,7 @@ export async function rekeySchoolDirectory(
      ON CONFLICT DO NOTHING`,
     [fromOwnerId, toOwnerId],
   );
+  await mergeStudentAssignments(tx, fromOwnerId, toOwnerId);
   const actors = await rewriteActors(tx, fromOwnerId, toOwnerId);
   const deleted = await tx.query(`DELETE FROM school_users WHERE owner_id = $1 RETURNING 1`, [
     fromOwnerId,

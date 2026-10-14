@@ -12,7 +12,14 @@ import {
 import { SchoolNameTakenError } from './errors';
 import { ensureSchoolSchema } from './schema';
 import { isSchoolRole, sortSchoolRoles, type SchoolRole } from './roles';
-import type { SchoolClass, SchoolRepository, SchoolUser } from './types';
+import type {
+  AssignmentMatch,
+  CourseAssignment,
+  LearnerAssignment,
+  SchoolClass,
+  SchoolRepository,
+  SchoolUser,
+} from './types';
 
 const USER_COLUMNS = `
   u.owner_id,
@@ -314,6 +321,124 @@ export class PgSchoolRepository implements SchoolRepository {
       ownerId,
     ]);
     return this.requireClass(classId);
+  }
+
+  async assignCourseClass(stageId: string, classId: string, assignedBy: string): Promise<void> {
+    await this.db.query(
+      `INSERT INTO school_course_class_assignments (stage_id, class_id, assigned_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (stage_id, class_id) DO NOTHING`,
+      [stageId, classId, assignedBy],
+    );
+  }
+
+  async removeCourseClass(stageId: string, classId: string): Promise<void> {
+    await this.db.query(
+      `DELETE FROM school_course_class_assignments WHERE stage_id = $1 AND class_id = $2`,
+      [stageId, classId],
+    );
+  }
+
+  async assignCourseStudents(
+    stageId: string,
+    ownerIds: readonly string[],
+    assignedBy: string,
+  ): Promise<void> {
+    for (const ownerId of ownerIds) {
+      await this.db.query(
+        `INSERT INTO school_course_student_assignments (stage_id, owner_id, assigned_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (stage_id, owner_id) DO NOTHING`,
+        [stageId, ownerId, assignedBy],
+      );
+    }
+  }
+
+  async removeCourseStudent(stageId: string, ownerId: string): Promise<void> {
+    await this.db.query(
+      `DELETE FROM school_course_student_assignments WHERE stage_id = $1 AND owner_id = $2`,
+      [stageId, ownerId],
+    );
+  }
+
+  async getCourseAssignment(stageId: string): Promise<CourseAssignment> {
+    const classes = await this.db.query<{ class_id: string } & Record<string, unknown>>(
+      `SELECT class_id FROM school_course_class_assignments
+        WHERE stage_id = $1
+        ORDER BY assigned_at ASC, class_id ASC`,
+      [stageId],
+    );
+    const students = await this.db.query<{ owner_id: string } & Record<string, unknown>>(
+      `SELECT owner_id FROM school_course_student_assignments
+        WHERE stage_id = $1
+        ORDER BY assigned_at ASC, owner_id ASC`,
+      [stageId],
+    );
+    return {
+      classIds: classes.rows.map((row) => row.class_id),
+      studentIds: students.rows.map((row) => row.owner_id),
+    };
+  }
+
+  async assignmentMatch(stageId: string, ownerId: string): Promise<AssignmentMatch> {
+    const result = await this.db.query<
+      { class_assign: boolean; student_assign: boolean } & Record<string, unknown>
+    >(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM school_course_class_assignments AS a
+           JOIN school_class_members AS m
+             ON m.class_id = a.class_id AND m.owner_id = $2
+          WHERE a.stage_id = $1
+       ) AS class_assign,
+       EXISTS (
+         SELECT 1
+           FROM school_course_student_assignments AS s
+          WHERE s.stage_id = $1 AND s.owner_id = $2
+       ) AS student_assign`,
+      [stageId, ownerId],
+    );
+    const row = result.rows[0];
+    return {
+      classAssign: row?.class_assign === true,
+      studentAssign: row?.student_assign === true,
+    };
+  }
+
+  async listLearnerAssignments(ownerId: string): Promise<LearnerAssignment[]> {
+    const classes = await this.db.query<
+      { stage_id: string; class_id: string } & Record<string, unknown>
+    >(
+      `SELECT a.stage_id, a.class_id
+         FROM school_course_class_assignments AS a
+         JOIN school_class_members AS m
+           ON m.class_id = a.class_id AND m.owner_id = $1
+        ORDER BY a.stage_id ASC, a.class_id ASC`,
+      [ownerId],
+    );
+    const directs = await this.db.query<{ stage_id: string } & Record<string, unknown>>(
+      `SELECT stage_id FROM school_course_student_assignments
+        WHERE owner_id = $1
+        ORDER BY stage_id ASC`,
+      [ownerId],
+    );
+    const byStage = new Map<string, LearnerAssignment>();
+    for (const row of classes.rows) {
+      const existing = byStage.get(row.stage_id);
+      if (existing) existing.classIds.push(row.class_id);
+      else
+        byStage.set(row.stage_id, {
+          stageId: row.stage_id,
+          classIds: [row.class_id],
+          direct: false,
+        });
+    }
+    for (const row of directs.rows) {
+      const existing = byStage.get(row.stage_id);
+      if (existing) existing.direct = true;
+      else byStage.set(row.stage_id, { stageId: row.stage_id, classIds: [], direct: true });
+    }
+    return [...byStage.values()].sort((a, b) => (a.stageId < b.stageId ? -1 : 1));
   }
 
   private async requireClass(classId: string): Promise<SchoolClass> {

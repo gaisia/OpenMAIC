@@ -5,7 +5,19 @@
  */
 import { SchoolNameTakenError } from './errors';
 import { sortSchoolRoles, type SchoolRole } from './roles';
-import type { SchoolClass, SchoolRepository, SchoolUser } from './types';
+import type {
+  AssignmentMatch,
+  CourseAssignment,
+  LearnerAssignment,
+  SchoolClass,
+  SchoolRepository,
+  SchoolUser,
+} from './types';
+
+interface AssignmentRow {
+  assignedBy: string;
+  assignedAt: string;
+}
 
 function cloneUser(user: SchoolUser): SchoolUser {
   return { ...user, roles: [...user.roles] };
@@ -22,6 +34,10 @@ function cloneClass(schoolClass: SchoolClass): SchoolClass {
 export class MemorySchoolRepository implements SchoolRepository {
   private readonly users = new Map<string, SchoolUser>();
   private readonly classes = new Map<string, SchoolClass>();
+  /** stageId → classId → row */
+  private readonly classAssignments = new Map<string, Map<string, AssignmentRow>>();
+  /** stageId → ownerId → row */
+  private readonly studentAssignments = new Map<string, Map<string, AssignmentRow>>();
 
   async getUser(ownerId: string): Promise<SchoolUser | null> {
     const user = this.users.get(ownerId);
@@ -158,6 +174,76 @@ export class MemorySchoolRepository implements SchoolRepository {
     const schoolClass = this.require(classId);
     schoolClass.memberIds = schoolClass.memberIds.filter((id) => id !== ownerId);
     return cloneClass(schoolClass);
+  }
+
+  async assignCourseClass(stageId: string, classId: string, assignedBy: string): Promise<void> {
+    this.require(classId);
+    const rows = this.classAssignments.get(stageId) ?? new Map<string, AssignmentRow>();
+    if (!rows.has(classId)) {
+      rows.set(classId, { assignedBy, assignedAt: new Date().toISOString() });
+    }
+    this.classAssignments.set(stageId, rows);
+  }
+
+  async removeCourseClass(stageId: string, classId: string): Promise<void> {
+    this.classAssignments.get(stageId)?.delete(classId);
+  }
+
+  async assignCourseStudents(
+    stageId: string,
+    ownerIds: readonly string[],
+    assignedBy: string,
+  ): Promise<void> {
+    const rows = this.studentAssignments.get(stageId) ?? new Map<string, AssignmentRow>();
+    for (const ownerId of ownerIds) {
+      if (!this.users.has(ownerId)) throw new Error(`school user ${ownerId} does not exist`);
+      if (!rows.has(ownerId)) {
+        rows.set(ownerId, { assignedBy, assignedAt: new Date().toISOString() });
+      }
+    }
+    this.studentAssignments.set(stageId, rows);
+  }
+
+  async removeCourseStudent(stageId: string, ownerId: string): Promise<void> {
+    this.studentAssignments.get(stageId)?.delete(ownerId);
+  }
+
+  async getCourseAssignment(stageId: string): Promise<CourseAssignment> {
+    return {
+      classIds: [...(this.classAssignments.get(stageId)?.keys() ?? [])].sort(),
+      studentIds: [...(this.studentAssignments.get(stageId)?.keys() ?? [])].sort(),
+    };
+  }
+
+  async assignmentMatch(stageId: string, ownerId: string): Promise<AssignmentMatch> {
+    const studentAssign = this.studentAssignments.get(stageId)?.has(ownerId) === true;
+    let classAssign = false;
+    for (const classId of this.classAssignments.get(stageId)?.keys() ?? []) {
+      const schoolClass = this.classes.get(classId);
+      if (schoolClass?.memberIds.includes(ownerId)) {
+        classAssign = true;
+        break;
+      }
+    }
+    return { classAssign, studentAssign };
+  }
+
+  async listLearnerAssignments(ownerId: string): Promise<LearnerAssignment[]> {
+    const byStage = new Map<string, LearnerAssignment>();
+    for (const [stageId, classes] of this.classAssignments) {
+      const classIds = [...classes.keys()].filter((classId) =>
+        this.classes.get(classId)?.memberIds.includes(ownerId),
+      );
+      if (classIds.length === 0) continue;
+      byStage.set(stageId, { stageId, classIds: classIds.sort(), direct: false });
+    }
+    for (const [stageId, students] of this.studentAssignments) {
+      if (!students.has(ownerId)) continue;
+      const existing = byStage.get(stageId);
+      if (existing) existing.direct = true;
+      else byStage.set(stageId, { stageId, classIds: [], direct: true });
+    }
+    return [...byStage.values()].sort((a, b) => (a.stageId < b.stageId ? -1 : 1));
   }
 
   private require(classId: string): SchoolClass {

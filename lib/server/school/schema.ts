@@ -1,11 +1,16 @@
 /**
  * School directory tables: user profiles, global role bindings, classes,
- * teaching assignments, and class membership.
+ * teaching assignments, class membership, and course assignments.
  *
  * Provisioned lazily on the first school login or school API call
  * (`ensureSchoolSchema`), and listed in `APP_SCHEMA_STORES` so a database
  * upgraded by a newer release is refused at startup. Version 1 is the
- * baseline and is idempotent statement by statement.
+ * directory baseline. Version 2 adds course↔class and course↔student
+ * assignments. Both are idempotent statement by statement.
+ *
+ * Publication itself is not a school column. Publish writes the upstream
+ * `stage_meta.is_public` / `published_at` pair (`course:publish`). Assignments
+ * stay here and remain after unpublish, so a later publish restores them.
  */
 import type { Queryable } from '@openmaic/storage/document/pg';
 import { applySchemaMigrations, type SchemaMigrationSet } from '@openmaic/storage/pg-migrations';
@@ -64,9 +69,43 @@ CREATE INDEX IF NOT EXISTS school_class_members_owner_idx
   ON school_class_members (owner_id);
 `;
 
+/**
+ * Course assignments. A class row is membership-dynamic: a student who joins
+ * the class later matches it without a new write. A student row is that one
+ * person. Neither row requires the course to be published.
+ */
+export const SCHOOL_ASSIGNMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS school_course_class_assignments (
+  stage_id TEXT NOT NULL,
+  class_id TEXT NOT NULL REFERENCES school_classes (id) ON DELETE CASCADE,
+  assigned_by TEXT NOT NULL,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (stage_id, class_id),
+  CONSTRAINT school_course_class_stage_len CHECK (char_length(stage_id) BETWEEN 1 AND 256)
+);
+
+CREATE INDEX IF NOT EXISTS school_course_class_class_idx
+  ON school_course_class_assignments (class_id);
+
+CREATE TABLE IF NOT EXISTS school_course_student_assignments (
+  stage_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL REFERENCES school_users (owner_id) ON DELETE CASCADE ON UPDATE CASCADE,
+  assigned_by TEXT NOT NULL,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (stage_id, owner_id),
+  CONSTRAINT school_course_student_stage_len CHECK (char_length(stage_id) BETWEEN 1 AND 256)
+);
+
+CREATE INDEX IF NOT EXISTS school_course_student_owner_idx
+  ON school_course_student_assignments (owner_id);
+`;
+
 export const SCHOOL_MIGRATIONS: SchemaMigrationSet = {
   store: 'school-directory',
-  migrations: [{ version: 1, name: 'baseline', up: SCHOOL_SCHEMA, transaction: false }],
+  migrations: [
+    { version: 1, name: 'baseline', up: SCHOOL_SCHEMA, transaction: false },
+    { version: 2, name: 'course_assignments', up: SCHOOL_ASSIGNMENT_SCHEMA, transaction: true },
+  ],
 };
 
 export async function ensureSchoolSchema(queryable: Queryable): Promise<void> {

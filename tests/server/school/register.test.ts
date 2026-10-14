@@ -86,5 +86,7 @@ describe('school identity configuration', () => {
     expect(configured.methods.map((item) => item.name)).toEqual(['schoolGatewayJwt']);
     expect(getPersistenceHooks().name).toBe('school-class');
     expect(typeof getPersistenceHooks().authorizeCreate).toBe('function');
+    expect(getPersistenceHooks().library?.name).toBe('school-class');
+    expect(typeof getPersistenceHooks().library?.list).toBe('function');
   });
 });
