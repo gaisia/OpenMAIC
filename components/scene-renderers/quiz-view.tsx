@@ -89,6 +89,68 @@ const QuizMathText = memo(function QuizMathText({
   );
 });
 
+/**
+ * School mode persists the attempt. 404 means school identity is off, and the
+ * caller falls back to local choice grading plus `/api/quiz-grade`. Any other
+ * failure is surfaced: a local-only score would not match the gradebook.
+ */
+async function gradeViaSchool(
+  stageId: string,
+  sceneId: string,
+  answers: Record<string, string | string[]>,
+  language: string,
+  questions: QuizQuestion[],
+): Promise<QuestionResult[] | null> {
+  const res = await fetch(
+    `/api/school/courses/${encodeURIComponent(stageId)}/quizzes/${encodeURIComponent(sceneId)}/submit`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers, language }),
+    },
+  );
+  if (res.status === 404) {
+    // School identity off answers with a plain 404. A JSON error code is a
+    // real refusal (missing course or quiz) and must not fall back to a
+    // local score that the gradebook will never see.
+    const text = await res.text();
+    let code: string | undefined;
+    try {
+      code = (JSON.parse(text) as { error?: { code?: string } }).error?.code;
+    } catch {
+      return null;
+    }
+    if (!code) return null;
+    throw new Error(`school quiz submit HTTP 404 ${code}`);
+  }
+  if (!res.ok) throw new Error(`school quiz submit HTTP ${res.status}`);
+  const data = (await res.json()) as {
+    attempt?: {
+      result?: {
+        perQuestion?: {
+          questionId: string;
+          earned: number;
+          correct: boolean | null;
+          comment?: string;
+        }[];
+      };
+    };
+  };
+  const perQuestion = data.attempt?.result?.perQuestion;
+  if (!perQuestion) throw new Error('school quiz submit returned no result');
+  const byId = new Map(perQuestion.map((item) => [item.questionId, item]));
+  return questions.map((question) => {
+    const item = byId.get(question.id);
+    return {
+      questionId: question.id,
+      correct: item?.correct ?? null,
+      status: item?.correct ? 'correct' : 'incorrect',
+      earned: item?.earned ?? 0,
+      ...(item?.comment ? { aiComment: item.comment } : {}),
+    };
+  });
+}
+
 /** Call /api/quiz-grade for a single short-answer question. */
 async function gradeShortAnswerQuestion(
   q: QuizQuestion,
@@ -787,31 +849,40 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     );
   }, [attemptId, answers, runtimeWriter, sceneId, stageId, viewLifetime]);
 
-  // When entering grading phase, grade choice questions locally + call API for short-answer
+  // School mode persists via the submit API. Otherwise grade locally and call /api/quiz-grade.
   useEffect(() => {
     if (phase !== 'grading') return;
     let cancelled = false;
 
     (async () => {
-      // 1. Grade choice questions locally (instant)
-      const choiceResults = gradeChoiceQuestions(questions, answers);
-
-      // 2. Grade short-answer questions via AI API (parallel)
-      const shortAnswerQs = questions.filter(isShortAnswer);
-      const aiResults = await Promise.all(
-        shortAnswerQs.map((q) =>
-          gradeShortAnswerQuestion(q, (answers[q.id] as string) ?? '', locale),
-        ),
-      );
-
-      if (cancelled) return;
-
-      // 3. Merge results in original question order
-      const allResultsMap = new Map<string, QuestionResult>();
-      for (const r of [...choiceResults, ...aiResults]) {
-        allResultsMap.set(r.questionId, r);
+      let ordered: QuestionResult[];
+      try {
+        const schoolResults = await gradeViaSchool(stageId, sceneId, answers, locale, questions);
+        if (cancelled) return;
+        if (schoolResults) {
+          ordered = schoolResults;
+        } else {
+          // School identity is off. Grade choice questions locally and short
+          // answers through /api/quiz-grade, which the school submit path wraps.
+          const choiceResults = gradeChoiceQuestions(questions, answers);
+          const shortAnswerQs = questions.filter(isShortAnswer);
+          const aiResults = await Promise.all(
+            shortAnswerQs.map((q) =>
+              gradeShortAnswerQuestion(q, (answers[q.id] as string) ?? '', locale),
+            ),
+          );
+          if (cancelled) return;
+          const allResultsMap = new Map<string, QuestionResult>();
+          for (const r of [...choiceResults, ...aiResults]) {
+            allResultsMap.set(r.questionId, r);
+          }
+          ordered = questions.map((q) => allResultsMap.get(q.id)!).filter(Boolean);
+        }
+      } catch (error) {
+        log.warn('Failed to grade quiz:', error);
+        if (!cancelled) setRuntimeGate({ status: 'error' });
+        return;
       }
-      const ordered = questions.map((q) => allResultsMap.get(q.id)!).filter(Boolean);
 
       if (!attemptId) {
         setRuntimeGate({ status: 'error' });

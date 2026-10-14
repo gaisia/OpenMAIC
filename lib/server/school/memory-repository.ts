@@ -9,6 +9,10 @@ import type {
   AssignmentMatch,
   CourseAssignment,
   LearnerAssignment,
+  NewQuizAttempt,
+  QuizAttemptRecord,
+  QuizAnswers,
+  QuizResultRecord,
   SchoolClass,
   SchoolRepository,
   SchoolUser,
@@ -17,6 +21,29 @@ import type {
 interface AssignmentRow {
   assignedBy: string;
   assignedAt: string;
+}
+
+function cloneAnswers(answers: QuizAnswers): QuizAnswers {
+  const copy: QuizAnswers = {};
+  for (const [key, value] of Object.entries(answers)) {
+    copy[key] = Array.isArray(value) ? [...value] : value;
+  }
+  return copy;
+}
+
+function cloneResult(result: QuizResultRecord): QuizResultRecord {
+  return {
+    ...result,
+    perQuestion: result.perQuestion.map((item) => ({ ...item })),
+  };
+}
+
+function cloneAttempt(attempt: QuizAttemptRecord): QuizAttemptRecord {
+  return {
+    ...attempt,
+    answers: cloneAnswers(attempt.answers),
+    result: attempt.result ? cloneResult(attempt.result) : null,
+  };
 }
 
 function cloneUser(user: SchoolUser): SchoolUser {
@@ -38,6 +65,7 @@ export class MemorySchoolRepository implements SchoolRepository {
   private readonly classAssignments = new Map<string, Map<string, AssignmentRow>>();
   /** stageId → ownerId → row */
   private readonly studentAssignments = new Map<string, Map<string, AssignmentRow>>();
+  private readonly attempts: QuizAttemptRecord[] = [];
 
   async getUser(ownerId: string): Promise<SchoolUser | null> {
     const user = this.users.get(ownerId);
@@ -244,6 +272,59 @@ export class MemorySchoolRepository implements SchoolRepository {
       else byStage.set(stageId, { stageId, classIds: [], direct: true });
     }
     return [...byStage.values()].sort((a, b) => (a.stageId < b.stageId ? -1 : 1));
+  }
+
+  async insertQuizAttempt(input: NewQuizAttempt): Promise<QuizAttemptRecord> {
+    const now = new Date().toISOString();
+    const record: QuizAttemptRecord = {
+      id: input.id,
+      ownerId: input.ownerId,
+      stageId: input.stageId,
+      sceneId: input.sceneId,
+      answers: cloneAnswers(input.answers),
+      submittedAt: now,
+      status: input.status,
+      source: input.source,
+      result: input.result
+        ? {
+            perQuestion: input.result.perQuestion.map((item) => ({ ...item })),
+            totalScore: input.result.totalScore,
+            totalPoints: input.result.totalPoints,
+            gradedAt: now,
+            grader: input.result.grader,
+          }
+        : null,
+    };
+    this.attempts.push(record);
+    return cloneAttempt(record);
+  }
+
+  async getQuizAttempt(id: string): Promise<QuizAttemptRecord | null> {
+    const found = this.attempts.find((attempt) => attempt.id === id);
+    return found ? cloneAttempt(found) : null;
+  }
+
+  async listQuizAttempts(ownerId: string): Promise<QuizAttemptRecord[]> {
+    return this.attempts
+      .filter((attempt) => attempt.ownerId === ownerId)
+      .reverse()
+      .map(cloneAttempt);
+  }
+
+  async listLatestStudentAttempts(input: {
+    stageId: string;
+    sceneId: string;
+    ownerIds: readonly string[];
+  }): Promise<QuizAttemptRecord[]> {
+    const wanted = new Set(input.ownerIds);
+    const latest = new Map<string, QuizAttemptRecord>();
+    for (const attempt of this.attempts) {
+      if (attempt.stageId !== input.stageId || attempt.sceneId !== input.sceneId) continue;
+      if (attempt.source !== 'student' || attempt.status !== 'graded' || !attempt.result) continue;
+      if (!wanted.has(attempt.ownerId)) continue;
+      latest.set(attempt.ownerId, attempt);
+    }
+    return [...latest.values()].map(cloneAttempt);
   }
 
   private require(classId: string): SchoolClass {

@@ -43,6 +43,53 @@ export interface LearnerAssignment {
   direct: boolean;
 }
 
+export type QuizAttemptStatus = 'submitted' | 'graded' | 'grade_failed';
+export type QuizAttemptSource = 'student' | 'teacher_self';
+export type QuizGrader = 'local' | 'llm' | 'mixed';
+
+/** One question on a persisted result. `correct` is null when it was not decided. */
+export interface QuizQuestionScore {
+  questionId: string;
+  earned: number;
+  maxPoints: number;
+  correct: boolean | null;
+  comment?: string;
+}
+
+export interface QuizResultRecord {
+  perQuestion: QuizQuestionScore[];
+  totalScore: number;
+  totalPoints: number;
+  gradedAt: string;
+  grader: QuizGrader;
+}
+
+export type QuizAnswers = Record<string, string | string[]>;
+
+/** A stored submission. Gradebook reads ignore `teacher_self`. */
+export interface QuizAttemptRecord {
+  id: string;
+  ownerId: string;
+  stageId: string;
+  sceneId: string;
+  answers: QuizAnswers;
+  submittedAt: string;
+  status: QuizAttemptStatus;
+  source: QuizAttemptSource;
+  result: QuizResultRecord | null;
+}
+
+export interface NewQuizAttempt {
+  id: string;
+  ownerId: string;
+  stageId: string;
+  sceneId: string;
+  answers: QuizAnswers;
+  status: QuizAttemptStatus;
+  source: QuizAttemptSource;
+  result: Omit<QuizResultRecord, 'gradedAt'> | null;
+}
+
 export interface SchoolRepository {
   getUser(ownerId: string): Promise<SchoolUser | null>;
   getUsers(ownerIds: readonly string[]): Promise<SchoolUser[]>;
@@ -101,4 +148,18 @@ export interface SchoolRepository {
   assignmentMatch(stageId: string, ownerId: string): Promise<AssignmentMatch>;
   /** Every course the learner currently matches, class hits and direct hits. */
   listLearnerAssignments(ownerId: string): Promise<LearnerAssignment[]>;
+  /** Insert one attempt and, when grading succeeded, its result. Retakes are new rows. */
+  insertQuizAttempt(input: NewQuizAttempt): Promise<QuizAttemptRecord>;
+  getQuizAttempt(id: string): Promise<QuizAttemptRecord | null>;
+  /** Newest first, including teacher self-tests and older retakes. */
+  listQuizAttempts(ownerId: string): Promise<QuizAttemptRecord[]>;
+  /**
+   * Latest graded `student` attempt per owner for one scene. Owners with no
+   * such row are absent. `teacher_self` never qualifies.
+   */
+  listLatestStudentAttempts(input: {
+    stageId: string;
+    sceneId: string;
+    ownerIds: readonly string[];
+  }): Promise<QuizAttemptRecord[]>;
 }

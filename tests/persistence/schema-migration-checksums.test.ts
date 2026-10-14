@@ -200,6 +200,13 @@ const SHIPPED: readonly (readonly [
     true,
     '48ff6c836a135ec457a321036d7cf24967557b2d7a6e29f3aecb67def846fbfd',
   ],
+  [
+    'school-directory',
+    3,
+    'quiz_attempts',
+    true,
+    'cbfe2c944ab9d26a15df3ea1cf4639f0caedf4b6ea1401fcd9b006c0b0323890',
+  ],
 ];
 
 /**
