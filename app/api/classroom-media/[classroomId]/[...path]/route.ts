@@ -8,6 +8,9 @@ import {
 } from '@/lib/server/classroom-storage';
 import { parseRangeHeader } from '@/lib/server/http-range';
 import { readStageAccessIncludingDeleted } from '@/lib/server/stage-access';
+import { authenticateRequestOwner } from '@/lib/server/identity/with-owner';
+import { schoolDocumentReadDenial } from '@/lib/server/school/courses';
+import { schoolJwtEnvIsSet } from '@/lib/server/school/jwt-config';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ClassroomMedia');
@@ -75,6 +78,15 @@ export async function GET(
         { error: 'Not found' },
         { status: 404, headers: ERROR_CACHE_HEADERS },
       );
+    }
+
+    // School mode: media bytes follow the same canRead rule as the document.
+    // A stage id, or a copied classroom URL, is not enough.
+    if (schoolJwtEnvIsSet()) {
+      const owner = await authenticateRequestOwner(req);
+      if (!owner.ok) return owner.response;
+      const denial = await schoolDocumentReadDenial(owner.principal, classroomId);
+      if (denial) return denial;
     }
 
     // Resolve symlinks and verify the real path stays within the classroom dir

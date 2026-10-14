@@ -27,6 +27,7 @@ import { NextResponse } from 'next/server';
 import { isServerPersistenceConfigured } from '@/lib/config/feature-flags';
 import { resolveStageAccess } from '@/lib/server/stage-access';
 import { withRequestOwner } from '@/lib/server/identity/with-owner';
+import { schoolDocumentReadDenial } from '@/lib/server/school/courses';
 
 // Per-viewer and mutable on every publish/unpublish/delete: this response must
 // never be cached, by Next or by anything in front of it.
@@ -46,7 +47,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   // owner".
   if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
 
-  return withRequestOwner(req, async ({ ownerId }, responseHeaders) => {
+  return withRequestOwner(req, async (principal, responseHeaders) => {
     const { stageId } = await params;
     try {
       const access = await resolveStageAccess(stageId);
@@ -56,11 +57,19 @@ export async function GET(req: NextRequest, { params }: Params) {
         return NextResponse.json({ error: 'not_found' }, { status: 404, headers: responseHeaders });
       }
 
+      // School mode refuses a direct stage id the caller may not learn, so
+      // this sidecar cannot confirm a draft or an unassigned course.
+      const denial = await schoolDocumentReadDenial(principal, stageId);
+      if (denial) {
+        for (const [name, value] of responseHeaders.entries()) denial.headers.append(name, value);
+        return denial;
+      }
+
       // Identity comparison, and nothing else: this boolean is the client's
       // ONLY owner signal, so a `true` here must mean every write through the
       // owner-bound store will be accepted (the store re-checks the owner
       // scope inside its write transactions).
-      const isOwner = access.ownerId === ownerId;
+      const isOwner = access.ownerId === principal.ownerId;
 
       return NextResponse.json(
         {

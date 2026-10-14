@@ -5,8 +5,9 @@
  * variables unset this does nothing, and the process keeps the upstream
  * anonymous, single-user, or shared-team behavior. When they are set, the
  * gateway JWT method is the only owner auth method, anonymous fallback is
- * off, students cannot create courses, and school directory rows follow an
- * anonymous-owner claim.
+ * off, students cannot create courses, school directory rows follow an
+ * anonymous-owner claim, and the library plus direct stage reads follow
+ * `canRead` (published and assigned). Public share links stay disabled.
  */
 import { registerClaimParticipant } from '@/lib/persistence/owner-claims';
 import { configureOwnerAuthentication } from '@/lib/server/identity';
@@ -15,6 +16,7 @@ import { configurePersistenceHooks } from '@/lib/server/persistence-hooks';
 
 import { authorizeSchoolCreate } from './authorize-create';
 import { rekeySchoolDirectory } from './claims';
+import { listSchoolLibraryStageIds } from './courses';
 import { readSchoolJwtConfig } from './jwt-config';
 import { getSchoolRepository } from './repository';
 
@@ -67,6 +69,10 @@ export function registerSchoolHost(env: NodeJS.ProcessEnv = process.env): boolea
     name: 'school-class',
     async authorizeCreate(_tx, actor) {
       return authorizeSchoolCreate(await getSchoolRepository(), actor);
+    },
+    library: {
+      name: 'school-class',
+      list: (context) => listSchoolLibraryStageIds(context),
     },
   });
   registerClaimParticipant({

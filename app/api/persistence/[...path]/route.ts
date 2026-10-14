@@ -43,6 +43,7 @@ import { APP_RUNTIME_PAYLOAD_VALIDATORS } from '@/lib/runtime/payload-validators
 import type { OwnerPrincipal } from '@/lib/server/identity/types';
 import { withRequestOwner } from '@/lib/server/identity/with-owner';
 import { getPersistenceHooks } from '@/lib/server/persistence-hooks/registry';
+import { schoolDocumentReadDenial } from '@/lib/server/school/courses';
 
 export const runtime = 'nodejs';
 
@@ -551,6 +552,13 @@ async function handlePersistenceRequestInner(
               .then((result) => result.rows.length > 0),
           (stageId) => readStageMeta(queryable, stageId),
         );
+        // School mode: knowing the stage id is not a read grant. Upstream
+        // still answers "missing" as 404; a live course the caller may not
+        // learn is refused here, including a direct classroom load.
+        if (access === 'allow' && action.kind === 'read') {
+          const denial = await schoolDocumentReadDenial(principal, action.stageId);
+          if (denial) return withHeaders(denial, responseHeaders);
+        }
       }
 
       const admission: AssetAdmission = {};
