@@ -4,10 +4,11 @@
  * created the tables yet is a no-op: schema migration refuses to run inside
  * the claim's transaction, so this only touches tables that already exist.
  *
- * Owner ids on profile, role, teacher, member, and direct course-assignment
- * rows follow `ON UPDATE CASCADE`. `assigned_by` is not a foreign key, so it
- * is rewritten here. When the account already has a profile, the anonymous
- * rows are merged and the source profile is deleted.
+ * Owner ids on profile, role, teacher, member, direct course-assignment, and
+ * quiz-attempt rows follow `ON UPDATE CASCADE`. `assigned_by` is not a
+ * foreign key, so it is rewritten here. When the account already has a
+ * profile, the anonymous rows are merged and the source profile is deleted.
+ * Quiz attempts are reassigned first so that delete does not cascade them away.
  */
 import type { Queryable } from '@openmaic/storage/document/pg';
 
@@ -60,6 +61,26 @@ async function rewriteActors(
     classAssignments.rows.length +
     studentAssignments.rows.length
   );
+}
+
+async function quizAttemptsReady(tx: Queryable): Promise<boolean> {
+  const result = await tx.query<{ present: boolean } & Record<string, unknown>>(
+    `SELECT to_regclass('school_quiz_attempts') IS NOT NULL AS present`,
+  );
+  return result.rows[0]?.present === true;
+}
+
+/** Keep submissions when two profiles merge. A plain owner-id update cascades instead. */
+async function mergeQuizAttempts(
+  tx: Queryable,
+  fromOwnerId: string,
+  toOwnerId: string,
+): Promise<void> {
+  if (!(await quizAttemptsReady(tx))) return;
+  await tx.query(`UPDATE school_quiz_attempts SET owner_id = $2 WHERE owner_id = $1`, [
+    fromOwnerId,
+    toOwnerId,
+  ]);
 }
 
 /** Copy direct course assignments onto the account before the source profile is deleted. */
@@ -129,6 +150,7 @@ export async function rekeySchoolDirectory(
     [fromOwnerId, toOwnerId],
   );
   await mergeStudentAssignments(tx, fromOwnerId, toOwnerId);
+  await mergeQuizAttempts(tx, fromOwnerId, toOwnerId);
   const actors = await rewriteActors(tx, fromOwnerId, toOwnerId);
   const deleted = await tx.query(`DELETE FROM school_users WHERE owner_id = $1 RETURNING 1`, [
     fromOwnerId,

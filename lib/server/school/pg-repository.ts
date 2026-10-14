@@ -4,6 +4,7 @@
  * the managed flag and a half-written role set.
  */
 import type { Queryable } from '@openmaic/storage/document/pg';
+import { encodeJson } from '@openmaic/storage/pg-json';
 import {
   nodePostgresTransaction,
   type ConnectableQueryable,
@@ -16,6 +17,14 @@ import type {
   AssignmentMatch,
   CourseAssignment,
   LearnerAssignment,
+  NewQuizAttempt,
+  QuizAnswers,
+  QuizAttemptRecord,
+  QuizAttemptSource,
+  QuizAttemptStatus,
+  QuizGrader,
+  QuizQuestionScore,
+  QuizResultRecord,
   SchoolClass,
   SchoolRepository,
   SchoolUser,
@@ -90,6 +99,139 @@ function toUser(row: UserRow): SchoolUser {
     rolesManaged: row.roles_managed === true,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
+  };
+}
+
+const ATTEMPT_COLUMNS = `
+  a.id,
+  a.owner_id,
+  a.stage_id,
+  a.scene_id,
+  a.answers,
+  a.submitted_at,
+  a.status,
+  a.source,
+  r.per_question,
+  r.total_score,
+  r.total_points,
+  r.graded_at,
+  r.grader
+`;
+
+const ATTEMPT_SQL = `
+  SELECT ${ATTEMPT_COLUMNS}
+    FROM school_quiz_attempts AS a
+    LEFT JOIN school_quiz_results AS r ON r.attempt_id = a.id
+`;
+
+interface AttemptRow extends Record<string, unknown> {
+  id: string;
+  owner_id: string;
+  stage_id: string;
+  scene_id: string;
+  answers: unknown;
+  submitted_at: Date | string;
+  status: string;
+  source: string;
+  per_question: unknown;
+  total_score: number | string | null;
+  total_points: number | string | null;
+  graded_at: Date | string | null;
+  grader: string | null;
+}
+
+function cloneAnswers(answers: QuizAnswers): QuizAnswers {
+  const copy: QuizAnswers = {};
+  for (const [key, value] of Object.entries(answers)) {
+    copy[key] = Array.isArray(value) ? [...value] : value;
+  }
+  return copy;
+}
+
+function readJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function readAnswers(value: unknown): QuizAnswers {
+  const parsed = readJson(value);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const answers: QuizAnswers = {};
+  for (const [key, answer] of Object.entries(parsed)) {
+    if (typeof answer === 'string') answers[key] = answer;
+    else if (Array.isArray(answer) && answer.every((item) => typeof item === 'string')) {
+      answers[key] = answer;
+    }
+  }
+  return answers;
+}
+
+function readQuestionScores(value: unknown): QuizQuestionScore[] {
+  const parsed = readJson(value);
+  if (!Array.isArray(parsed)) return [];
+  const scores: QuizQuestionScore[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.questionId !== 'string') continue;
+    const earned = asNumber(row.earned);
+    const maxPoints = asNumber(row.maxPoints);
+    const correct = row.correct === null ? null : row.correct === true;
+    const score: QuizQuestionScore = {
+      questionId: row.questionId,
+      earned,
+      maxPoints,
+      correct,
+    };
+    if (typeof row.comment === 'string' && row.comment.length > 0) score.comment = row.comment;
+    scores.push(score);
+  }
+  return scores;
+}
+
+function asNumber(value: unknown): number {
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isStatus(value: string): value is QuizAttemptStatus {
+  return value === 'submitted' || value === 'graded' || value === 'grade_failed';
+}
+
+function isSource(value: string): value is QuizAttemptSource {
+  return value === 'student' || value === 'teacher_self';
+}
+
+function isGrader(value: string): value is QuizGrader {
+  return value === 'local' || value === 'llm' || value === 'mixed';
+}
+
+function toAttempt(row: AttemptRow): QuizAttemptRecord {
+  const result: QuizResultRecord | null =
+    row.grader && isGrader(row.grader) && row.graded_at !== null
+      ? {
+          perQuestion: readQuestionScores(row.per_question),
+          totalScore: asNumber(row.total_score),
+          totalPoints: asNumber(row.total_points),
+          gradedAt: iso(row.graded_at),
+          grader: row.grader,
+        }
+      : null;
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    stageId: row.stage_id,
+    sceneId: row.scene_id,
+    answers: readAnswers(row.answers),
+    submittedAt: iso(row.submitted_at),
+    status: isStatus(row.status) ? row.status : 'submitted',
+    source: isSource(row.source) ? row.source : 'student',
+    result,
   };
 }
 
@@ -439,6 +581,106 @@ export class PgSchoolRepository implements SchoolRepository {
       else byStage.set(row.stage_id, { stageId: row.stage_id, classIds: [], direct: true });
     }
     return [...byStage.values()].sort((a, b) => (a.stageId < b.stageId ? -1 : 1));
+  }
+
+  async insertQuizAttempt(input: NewQuizAttempt): Promise<QuizAttemptRecord> {
+    return this.withTransaction(async (tx) => {
+      const inserted = await tx.query<{ submitted_at: Date | string } & Record<string, unknown>>(
+        `INSERT INTO school_quiz_attempts
+           (id, owner_id, stage_id, scene_id, answers, status, source)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+         RETURNING submitted_at`,
+        [
+          input.id,
+          input.ownerId,
+          input.stageId,
+          input.sceneId,
+          encodeJson(input.answers, 'quiz answers'),
+          input.status,
+          input.source,
+        ],
+      );
+      const submittedAt = iso(inserted.rows[0]!.submitted_at);
+      if (!input.result) {
+        return {
+          id: input.id,
+          ownerId: input.ownerId,
+          stageId: input.stageId,
+          sceneId: input.sceneId,
+          answers: cloneAnswers(input.answers),
+          submittedAt,
+          status: input.status,
+          source: input.source,
+          result: null,
+        };
+      }
+      const graded = await tx.query<{ graded_at: Date | string } & Record<string, unknown>>(
+        `INSERT INTO school_quiz_results
+           (attempt_id, per_question, total_score, total_points, grader)
+         VALUES ($1, $2::jsonb, $3, $4, $5)
+         RETURNING graded_at`,
+        [
+          input.id,
+          encodeJson(input.result.perQuestion, 'quiz per-question scores'),
+          input.result.totalScore,
+          input.result.totalPoints,
+          input.result.grader,
+        ],
+      );
+      return {
+        id: input.id,
+        ownerId: input.ownerId,
+        stageId: input.stageId,
+        sceneId: input.sceneId,
+        answers: cloneAnswers(input.answers),
+        submittedAt,
+        status: input.status,
+        source: input.source,
+        result: {
+          perQuestion: input.result.perQuestion.map((item) => ({ ...item })),
+          totalScore: input.result.totalScore,
+          totalPoints: input.result.totalPoints,
+          gradedAt: iso(graded.rows[0]!.graded_at),
+          grader: input.result.grader,
+        },
+      };
+    });
+  }
+
+  async getQuizAttempt(id: string): Promise<QuizAttemptRecord | null> {
+    const result = await this.db.query<AttemptRow>(`${ATTEMPT_SQL} WHERE a.id = $1`, [id]);
+    const row = result.rows[0];
+    return row ? toAttempt(row) : null;
+  }
+
+  async listQuizAttempts(ownerId: string): Promise<QuizAttemptRecord[]> {
+    const result = await this.db.query<AttemptRow>(
+      `${ATTEMPT_SQL} WHERE a.owner_id = $1 ORDER BY a.seq DESC`,
+      [ownerId],
+    );
+    return result.rows.map(toAttempt);
+  }
+
+  async listLatestStudentAttempts(input: {
+    stageId: string;
+    sceneId: string;
+    ownerIds: readonly string[];
+  }): Promise<QuizAttemptRecord[]> {
+    if (input.ownerIds.length === 0) return [];
+    const result = await this.db.query<AttemptRow>(
+      `SELECT DISTINCT ON (a.owner_id) ${ATTEMPT_COLUMNS}
+         FROM school_quiz_attempts AS a
+         LEFT JOIN school_quiz_results AS r ON r.attempt_id = a.id
+        WHERE a.stage_id = $1
+          AND a.scene_id = $2
+          AND a.owner_id = ANY($3::text[])
+          AND a.source = 'student'
+          AND a.status = 'graded'
+          AND r.attempt_id IS NOT NULL
+        ORDER BY a.owner_id, a.seq DESC`,
+      [input.stageId, input.sceneId, [...input.ownerIds]],
+    );
+    return result.rows.map(toAttempt);
   }
 
   private async requireClass(classId: string): Promise<SchoolClass> {
